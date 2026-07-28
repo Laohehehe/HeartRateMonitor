@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 import sys
 import os
 import asyncio
@@ -5,6 +6,15 @@ import threading
 import queue
 import configparser
 import traceback
+import ctypes
+import winsound
+import logging
+import winreg
+import json
+import subprocess
+import urllib.request
+import tempfile
+import concurrent.futures
 from datetime import datetime
 
 from PyQt5.QtWidgets import (
@@ -26,13 +36,105 @@ from PIL import Image, ImageDraw, ImageFont
 import pystray
 from pystray import MenuItem as item
 
+# ===================== 日志系统 =====================
+_LOG_DIR = os.environ.get('TMP') or os.environ.get('TEMP') or os.path.expanduser("~")
+_LOG_FILE = os.path.join(_LOG_DIR, f"heart_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log")
+
+_logger = logging.getLogger("Heart")
+_logger.setLevel(logging.DEBUG)
+
+_fh = logging.FileHandler(_LOG_FILE, encoding='utf-8')
+_fh.setLevel(logging.DEBUG)
+_fh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
+_logger.addHandler(_fh)
+
+if not getattr(sys, 'frozen', False):
+    _ch = logging.StreamHandler(sys.stdout)
+    _ch.setLevel(logging.DEBUG)
+    _ch.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
+    _logger.addHandler(_ch)
+
+logger = _logger
+logger.info(f"日志文件: {_LOG_FILE}")
+
+APP_VERSION = "26.7.28"
+GITHUB_REPO = "Laohehehe/HeartRateMonitor"
+
 # ===================== 资源路径 =====================
 def resource_path(relative_path):
-    if hasattr(sys, '_MEIPASS'):
-        return os.path.join(sys._MEIPASS, relative_path)
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass is not None:
+        return os.path.join(meipass, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 
-# ===================== 配置文件管理 =====================
+# ===================== Windows 系统声音 =====================
+# 系统声音事件名映射（显示名称 → 可能的注册表事件名列表，依次尝试）
+_SOUND_EVENT_MAP = {
+    "Windows Notify Calendar": ["CalendarReminder", "Notification.Default", "Reminder", "SystemAsterisk"],
+    "Windows Hardware Insert": ["DeviceConnect", "SystemAsterisk"],
+    "Windows Hardware Remove": ["DeviceDisconnect", "SystemExclamation"],
+    "Windows Hardware Fail": ["DeviceFail", "SystemHand"],
+}
+
+def _get_sound_file(alias):
+    """从注册表读取声音别名对应的 wav 文件路径"""
+    try:
+        key_path = f"AppEvents\\Schemes\\Apps\\.Default\\{alias}\\.default"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            value, _ = winreg.QueryValueEx(key, "")
+            return value
+    except:
+        return None
+
+def play_system_sound(sound_name):
+    """异步播放 Windows 系统声音
+    策略：
+    1. 从注册表读取别名对应的 .wav 文件路径，展开环境变量后用 SND_FILENAME 播放
+    2. 失败时尝试在 Windows Media 目录按文件名匹配直接播放
+    3. 最后回退到 SND_ALIAS 模式
+    """
+    aliases = _SOUND_EVENT_MAP.get(sound_name, [sound_name])
+    tried = []
+
+    # 策略1：直接在 Windows Media 目录按文件名匹配（优先于注册表，避免注册表指向错误文件）
+    system_root = os.environ.get('SystemRoot', 'C:\\Windows')
+    media_dir = os.path.join(system_root, 'Media')
+    for fname in [f"{sound_name}.wav", f"{sound_name.replace('Windows ', '')}.wav"]:
+        filepath = os.path.join(media_dir, fname)
+        if os.path.isfile(filepath):
+            if ctypes.windll.winmm.PlaySoundW(filepath, None, 0x00020000 | 0x0001 | 0x0002):
+                logger.debug(f"播放声音: {sound_name} (直接文件: {filepath}) 成功")
+                return
+            tried.append(f"文件({fname})(播放失败)")
+
+    # 策略2：从注册表读取文件路径
+    for alias in aliases:
+        try:
+            sound_file = _get_sound_file(alias)
+            if sound_file:
+                sound_file = os.path.expandvars(sound_file)
+                if os.path.isfile(sound_file):
+                    if ctypes.windll.winmm.PlaySoundW(sound_file, None, 0x00020000 | 0x0001 | 0x0002):
+                        logger.debug(f"播放声音: {sound_name} -> {alias} (文件: {sound_file}) 成功")
+                        return
+                    tried.append(f"{alias}(播放失败)")
+                else:
+                    tried.append(f"{alias}(文件不存在)")
+            else:
+                tried.append(f"{alias}(未配置)")
+        except Exception as e:
+            tried.append(f"{alias}({e})")
+
+    # 策略3：SND_ALIAS 回退
+    for alias in aliases:
+        try:
+            if ctypes.windll.winmm.PlaySoundW(alias, None, 0x00010000 | 0x0001 | 0x0002 | 0x0010):
+                logger.debug(f"播放声音: {sound_name} -> {alias} (SND_ALIAS 回退) 成功")
+                return
+        except:
+            pass
+
+    logger.warning(f"播放声音失败: {sound_name} (尝试: {', '.join(tried)})")
 def get_config_path():
     appdata = os.environ.get('APPDATA', '')
     folder = os.path.join(appdata, 'Heart')
@@ -121,6 +223,7 @@ class HeartRateWindow(QWidget):
     def show_context_menu(self, pos):
         menu = QMenu(self)
         action = menu.addAction("取消固定" if self.fixed else "固定窗口")
+        assert action is not None
         action.triggered.connect(self.monitor.toggle_fixed)
         menu.exec_(self.mapToGlobal(pos))
 
@@ -447,7 +550,10 @@ class ChartWindow(QWidget):
         self.timer.start(1000)
 
     def show_with_animation(self):
-        screen_geometry = QApplication.primaryScreen().geometry()
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        screen_geometry = screen.geometry()
         target_rect = QRect((screen_geometry.width() - self.width()) // 2,
                             (screen_geometry.height() - self.height()) // 2,
                             self.width(), self.height())
@@ -507,14 +613,14 @@ class ModernProgressBar(QWidget):
         self.timer.timeout.connect(self.update_animation)
         self.timer.start(30)
     
-    @pyqtProperty(int)
-    def current_width(self):
+    def _get_current_width(self):
         return self._current_width
     
-    @current_width.setter
-    def current_width(self, value):
+    def _set_current_width(self, value):
         self._current_width = value
         self.update()
+    
+    current_width = pyqtProperty(int, _get_current_width, _set_current_width)
     
     def update_animation(self):
         if self.state == "moving":
@@ -629,7 +735,7 @@ class MainWindow(QMainWindow):
         self.min_btn = QPushButton("─")
         self.min_btn.setFixedSize(30, 30)
         self.min_btn.setStyleSheet(btn_base_style + "QPushButton:hover { background: #E0E0E0; border-radius: 4px; }")
-        self.min_btn.clicked.connect(self.showMinimized)
+        self.min_btn.clicked.connect(self.animate_minimize)
         self.min_btn.installEventFilter(self)
         title_bar.addWidget(self.min_btn)
 
@@ -637,7 +743,7 @@ class MainWindow(QMainWindow):
         self.tray_btn.setFixedSize(30, 30)
         self.tray_btn.setToolTip("最小化到系统托盘")
         self.tray_btn.setStyleSheet(btn_base_style + "QPushButton:hover { background: #E0E0E0; border-radius: 4px; }")
-        self.tray_btn.clicked.connect(self.monitor.minimize_to_tray)
+        self.tray_btn.clicked.connect(self.animate_to_tray)
         self.tray_btn.installEventFilter(self)
         title_bar.addWidget(self.tray_btn)
 
@@ -657,7 +763,7 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
             }
         """)
-        self.close_btn.clicked.connect(self.monitor.quit_app)
+        self.close_btn.clicked.connect(self.animate_quit)
         self.close_btn.installEventFilter(self)
         title_bar.addWidget(self.close_btn)
 
@@ -696,10 +802,10 @@ class MainWindow(QMainWindow):
         for btn in (self.connect_btn, self.disconnect_btn):
             btn.setFont(QFont("Microsoft YaHei", 10))
         self.connect_btn.setStyleSheet(self._button_style())
-        self.connect_btn.clicked.connect(self.monitor.connect_device)
+        self.connect_btn.clicked.connect(self._on_connect_click)
         self.disconnect_btn.setStyleSheet(self._disabled_button_style())
         self.disconnect_btn.setEnabled(False)
-        self.disconnect_btn.clicked.connect(self.monitor.disconnect_device)
+        self.disconnect_btn.clicked.connect(self._on_disconnect_click)
         btn_layout.addWidget(self.connect_btn)
         btn_layout.addWidget(self.disconnect_btn)
         card_layout.addLayout(btn_layout)
@@ -861,8 +967,9 @@ class MainWindow(QMainWindow):
         self.overlay.show()
         self.progress_bar.start_animation()
         self.scan_btn.setEnabled(False)
-        if hasattr(self, 'anim_show') and self.anim_show.state() == QPropertyAnimation.Running:
-            self.anim_show.stop()
+        anim_show = getattr(self, 'anim_show', None)
+        if anim_show is not None and anim_show.state() == QPropertyAnimation.Running:
+            anim_show.stop()
         self.anim_show = QPropertyAnimation(self.overlay_effect, b"opacity")
         self.anim_show.setDuration(300)
         self.anim_show.setStartValue(self.overlay_effect.opacity())
@@ -871,8 +978,9 @@ class MainWindow(QMainWindow):
         self.anim_show.start()
 
     def hide_scan_overlay(self):
-        if hasattr(self, 'anim_hide') and self.anim_hide.state() == QPropertyAnimation.Running:
-            self.anim_hide.stop()
+        anim_hide = getattr(self, 'anim_hide', None)
+        if anim_hide is not None and anim_hide.state() == QPropertyAnimation.Running:
+            anim_hide.stop()
         self.anim_hide = QPropertyAnimation(self.overlay_effect, b"opacity")
         self.anim_hide.setDuration(300)
         self.anim_hide.setStartValue(self.overlay_effect.opacity())
@@ -985,7 +1093,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "心率窗口位置已保存。")
 
     def closeEvent(self, event):
-        self.monitor.minimize_to_tray()
+        self.animate_to_tray()
         event.ignore()
 
     def mousePressEvent(self, event):
@@ -1022,7 +1130,10 @@ class MainWindow(QMainWindow):
             self.scan_btn.setEnabled(True)
 
     def show_with_animation(self):
-        screen_geometry = QApplication.primaryScreen().geometry()
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        screen_geometry = screen.geometry()
         target_rect = QRect((screen_geometry.width() - self.width()) // 2,
                             (screen_geometry.height() - self.height()) // 2,
                             self.width(), self.height())
@@ -1035,6 +1146,236 @@ class MainWindow(QMainWindow):
         self.animation.setEndValue(target_rect)
         self.animation.setEasingCurve(QEasingCurve.OutBack)
         self.animation.start()
+
+    def _on_connect_click(self):
+        logger.debug("点击: 连接设备按钮")
+        self.monitor.connect_device()
+
+    def _on_disconnect_click(self):
+        logger.debug("点击: 断开连接按钮")
+        self.monitor.disconnect_device()
+
+    def _fade_out_animation(self, callback):
+        """窗口淡出动画（windowOpacity），动画结束后调用 callback"""
+        self._fade_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._fade_anim.setDuration(150)
+        self._fade_anim.setStartValue(self.windowOpacity())
+        self._fade_anim.setEndValue(0.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._fade_anim.finished.connect(callback)
+        self._fade_anim.start()
+
+    def changeEvent(self, event):
+        """窗口状态变化时恢复透明度（从最小化恢复时 opacity 可能为0）"""
+        if event.type() == QEvent.WindowStateChange:
+            old_state = event.oldState()
+            new_state = self.windowState()
+            if (old_state & Qt.WindowMinimized) and not (new_state & Qt.WindowMinimized):
+                self.setWindowOpacity(1.0)
+        super().changeEvent(event)
+
+    def animate_minimize(self):
+        """淡出动画后最小化到任务栏"""
+        logger.debug("触发: 最小化按钮")
+        self._fade_out_animation(self._do_minimize)
+
+    def _do_minimize(self):
+        # changeEvent 会在从任务栏恢复时重置透明度，此处不能重置（否则闪烁）
+        self.showMinimized()
+
+    def animate_to_tray(self):
+        """淡出动画后最小化到系统托盘"""
+        logger.debug("触发: 托盘按钮")
+        self._fade_out_animation(self._do_tray)
+
+    def _do_tray(self):
+        self.monitor.minimize_to_tray()
+
+    def animate_quit(self):
+        """淡出动画后退出应用"""
+        logger.debug("触发: 关闭按钮")
+        self._fade_out_animation(self._do_quit)
+
+    def _do_quit(self):
+        self.monitor.quit_app()
+
+# ===================== 跨线程恢复辅助 =====================
+class _RestoreHelper(QObject):
+    """用于从非 Qt 线程安全地触发窗口恢复操作"""
+    restore = pyqtSignal()
+
+class _UpdateSignal(QObject):
+    """用于从后台线程安全地触发更新操作"""
+    update_ready = pyqtSignal(str, str)  # (version, download_url)
+    download_done = pyqtSignal(str)  # (local_exe_path) 下载完成后在主线程触发
+
+# ===================== 版本检查与自动更新 =====================
+def _parse_version(v):
+    """将版本字符串转为可比较的整数元组，如 '26.7.28' -> (26, 7, 28)"""
+    try:
+        return tuple(int(x) for x in v.lstrip('vV').split('.'))
+    except:
+        return (0,)
+
+def _check_latest_release():
+    """查询 GitHub 最新 Release，返回 (tag_name, download_url) 或 (None, None)"""
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+    req = urllib.request.Request(url, headers={"User-Agent": f"HeartRateMonitor/{APP_VERSION}", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+    tag = data.get("tag_name", "")
+    assets = data.get("assets", [])
+    # 找第一个 .exe 下载链接
+    download_url = None
+    for asset in assets:
+        name = asset.get("name", "")
+        if name.lower().endswith(".exe"):
+            download_url = asset.get("browser_download_url")
+            break
+    return tag, download_url
+
+def _download_chunk(url, start, end, dest_base, index):
+    """下载单个分块，保存到临时文件"""
+    req = urllib.request.Request(url, headers={
+        "Range": f"bytes={start}-{end}",
+        "User-Agent": f"HeartRateMonitor/{APP_VERSION}"
+    })
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = resp.read()
+    chunk_file = f"{dest_base}.part{index}"
+    with open(chunk_file, 'wb') as f:
+        f.write(data)
+    return chunk_file
+
+
+def _download_update_thread(version, download_url, signal):
+    """后台线程：多线程分块下载更新文件"""
+    tmp_dir = tempfile.gettempdir()
+    new_exe = os.path.join(tmp_dir, f"HeartRateMonitor_{version}.exe")
+
+    # 尝试 URL 列表：镜像优先，原链接回退
+    urls = [
+        f"https://ghm.078465.xyz/{download_url}",
+        download_url,
+    ]
+
+    for url in urls:
+        try:
+            # 获取文件大小
+            req = urllib.request.Request(url, headers={"User-Agent": f"HeartRateMonitor/{APP_VERSION}"})
+            req.method = 'HEAD'
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                file_size = int(resp.headers.get('Content-Length', 0))
+            if file_size <= 0:
+                raise Exception("无法获取文件大小")
+
+            # 根据文件大小决定线程数
+            num_threads = 4 if file_size > 5 * 1024 * 1024 else 2
+            chunk_size = file_size // num_threads
+            logger.info(f"多线程下载: {file_size / 1024 / 1024:.1f}MB, {num_threads}线程")
+
+            chunks = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+                futures = []
+                for i in range(num_threads):
+                    start = i * chunk_size
+                    end = start + chunk_size - 1 if i < num_threads - 1 else file_size - 1
+                    futures.append(executor.submit(_download_chunk, url, start, end, new_exe, i))
+
+                for future in concurrent.futures.as_completed(futures):
+                    chunks.append(future.result())
+
+            # 合并分块
+            with open(new_exe, 'wb') as out:
+                for i in range(num_threads):
+                    cf = f"{new_exe}.part{i}"
+                    with open(cf, 'rb') as f:
+                        out.write(f.read())
+                    os.remove(cf)
+
+            logger.info(f"下载完成: {new_exe}")
+            signal.download_done.emit(new_exe)
+            return
+
+        except Exception as e:
+            logger.warning(f"下载失败: {e}")
+            # 清理残留分块
+            for i in range(10):
+                try:
+                    os.remove(f"{new_exe}.part{i}")
+                except:
+                    pass
+            continue
+
+    logger.error("下载更新失败: 所有链接均不可用")
+
+def _apply_update(new_exe):
+    """创建 ANSI 编码的更新批处理并执行"""
+    current_exe = sys.executable if getattr(sys, 'frozen', False) else None
+    if not current_exe:
+        logger.warning("开发模式下不支持自动更新")
+        return False
+
+    tmp_dir = tempfile.gettempdir()
+    script_path = os.path.join(tmp_dir, "heart_update.bat")
+    exe_name = os.path.basename(current_exe)
+
+    # 用短路径规避中文/空格问题
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        ctypes.windll.kernel32.GetShortPathNameW(current_exe, buf, 260)
+        short_current = buf.value
+        ctypes.windll.kernel32.GetShortPathNameW(new_exe, buf, 260)
+        short_new = buf.value
+    except:
+        short_new = new_exe
+        short_current = current_exe
+
+    bat_content = f"""@echo off
+:wait
+timeout /t 2 /nobreak >nul
+tasklist /FI "IMAGENAME eq {exe_name}" 2>nul | find /I "{exe_name}" >nul
+if not errorlevel 1 goto wait
+copy /y "{short_new}" "{short_current}" >nul 2>&1
+if exist "{short_current}" (
+    start "" "{short_current}"
+)
+del /q "{short_new}" >nul 2>&1
+"""
+    # 用系统默认编码（Windows ANSI，兼容中文字符）
+    with open(script_path, 'w') as f:
+        f.write(bat_content)
+    subprocess.Popen(
+        [script_path],
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+        close_fds=True
+    )
+    logger.info(f"启动更新脚本: {script_path}")
+    return True
+
+def _check_update_thread(update_signal):
+    """后台线程：检查版本并触发更新"""
+    try:
+        latest_tag, download_url = _check_latest_release()
+        if not latest_tag and not download_url:
+            logger.info("检查更新: 未找到 Release 信息")
+            return
+        logger.debug(f"检查更新: 最新 {latest_tag}, 当前 {APP_VERSION}")
+        if _parse_version(latest_tag) > _parse_version(APP_VERSION):
+            logger.info(f"发现新版本: {latest_tag}")
+            if download_url:
+                update_signal.update_ready.emit(latest_tag, download_url)
+            else:
+                logger.warning(f"新版本 {latest_tag} 无可下载的可执行文件")
+        else:
+            logger.info(f"已是最新版: {APP_VERSION}")
+    except Exception as e:
+        http_code = getattr(e, 'code', None)
+        if http_code:
+            logger.debug(f"检查更新失败 (HTTP {http_code})")
+        else:
+            logger.debug(f"检查更新失败: {e}")
 
 # ===================== 主监控逻辑 =====================
 class HeartRateMonitor:
@@ -1049,8 +1390,6 @@ class HeartRateMonitor:
         self.client = None
         self.hr_window = None
         self.tray_icon = None
-        self.loop = None
-        self.main_window = None
         self.chart_window = None
 
         self.hr_history = []
@@ -1063,6 +1402,15 @@ class HeartRateMonitor:
 
         self._emitter = SignalEmitter()
         self._emitter.scan_finished.connect(self._on_scan_finished)
+
+        # 自动更新
+        self._update_signal = _UpdateSignal()
+        self._update_signal.update_ready.connect(self._on_update_ready)
+        self._update_signal.download_done.connect(self._on_download_done)
+        threading.Thread(target=_check_update_thread, args=(self._update_signal,), daemon=True).start()
+
+        self._restore_helper = _RestoreHelper()
+        self._restore_helper.restore.connect(self._do_restore)
 
         self.loop = asyncio.new_event_loop()
         self.loop_thread = threading.Thread(target=self._run_event_loop, daemon=True)
@@ -1077,11 +1425,14 @@ class HeartRateMonitor:
             self.main_window = MainWindow(self)
             self.main_window.show_with_animation()
         except Exception as e:
-            print(f"主窗口创建失败: {e}")
+            logger.critical(f"主窗口创建失败: {e}")
             traceback.print_exc()
             sys.exit(1)
 
+        logger.info("心率监测应用启动完成")
         self.load_hr_window_position()
+
+        QTimer.singleShot(200, lambda: play_system_sound("Windows Notify Calendar"))
 
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_display)
@@ -1107,6 +1458,27 @@ class HeartRateMonitor:
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
 
+    def _on_update_ready(self, version, download_url):
+        """主线程：发现新版本，在后台线程下载（避免阻塞 UI）"""
+        logger.info(f"发现新版本: {version}，开始后台下载（使用镜像加速）")
+        threading.Thread(
+            target=_download_update_thread,
+            args=(version, download_url, self._update_signal),
+            daemon=True
+        ).start()
+
+    def _on_download_done(self, new_exe):
+        """主线程：下载完成，应用更新"""
+        logger.info(f"下载完成，准备应用更新: {new_exe}")
+        try:
+            if _apply_update(new_exe):
+                logger.info("更新完成，程序即将重启")
+                QTimer.singleShot(500, self.quit_app)
+            else:
+                logger.warning("更新失败：无法应用更新")
+        except Exception as e:
+            logger.error(f"更新失败: {e}")
+
     def start_scan(self):
         self.main_window.show_scan_overlay()
         self.main_window.device_list.clear()
@@ -1125,16 +1497,20 @@ class HeartRateMonitor:
 
     def connect_device(self):
         if self.connected or self.connecting:
+            logger.debug("连接设备: 已在连接中，忽略")
             return
         selected = self.main_window.device_list.currentItem()
         if not selected or "未找到" in selected.text():
+            logger.debug("连接设备: 未选择有效设备")
             return
         try:
             idx = self.main_window.device_list.currentRow()
             filtered_devices = [d for d in self.devices
                                 if d.name and d.name.strip() != "" and d.name.lower() != d.address.lower()]
             self.selected_device = filtered_devices[idx]
+            logger.info(f"连接设备: {self.selected_device.name} ({self.selected_device.address})")
         except:
+            logger.warning("连接设备: 获取选中设备失败")
             return
 
         self.connecting = True
@@ -1156,6 +1532,7 @@ class HeartRateMonitor:
         asyncio.run_coroutine_threadsafe(self._monitor_heart_rate(), self.loop)
 
     def disconnect_device(self):
+        logger.info("用户手动断开连接")
         self.reconnecting = False
         if self.client and self.client.is_connected:
             asyncio.run_coroutine_threadsafe(self.client.disconnect(), self.loop)
@@ -1164,6 +1541,7 @@ class HeartRateMonitor:
         self.main_window.set_connected_state(False)
         if self.hr_window:
             self.hr_window.update_hr("已断连")
+        play_system_sound("Windows Hardware Remove")
 
     async def _monitor_heart_rate(self):
         while self.reconnecting:
@@ -1195,17 +1573,24 @@ class HeartRateMonitor:
                     self.main_window.set_connected_state(True)
                     if self.hr_window:
                         self.hr_window.update_hr("--")
+                    logger.info("蓝牙设备连接成功")
+                    play_system_sound("Windows Hardware Insert")
 
                     await disconnected_event.wait()
             except Exception as e:
-                print(f"连接异常: {e}")
+                logger.error(f"连接异常: {e}")
+                play_system_sound("Windows Hardware Fail")
             finally:
+                was_connected = self.connected
                 self.client = None
                 self.connected = False
                 self.connecting = False
                 self.main_window.set_connected_state(False)
                 if self.hr_window:
                     self.hr_window.update_hr("已断连")
+                if was_connected:
+                    logger.info("蓝牙设备断开连接")
+                    play_system_sound("Windows Hardware Remove")
             if not self.reconnecting:
                 break
             await asyncio.sleep(5)
@@ -1265,11 +1650,17 @@ class HeartRateMonitor:
         self.toggle_fixed()
 
     def restore_window(self):
-        if self.tray_icon:
-            self.tray_icon.stop()
-            self.tray_icon = None
+        logger.debug("托盘菜单: 显示主界面")
+        # pyqtSignal.emit() 跨线程安全，自动将槽派发到接收者所在线程（Qt 主线程）
+        self._restore_helper.restore.emit()
+
+    def _do_restore(self):
+        """在主线程中执行窗口恢复操作（不停止托盘图标，避免线程死锁）"""
+        self.main_window.setWindowOpacity(1.0)
         self.main_window.show()
         self.main_window.activateWindow()
+        self.main_window.setWindowState(self.main_window.windowState() & ~Qt.WindowMinimized)
+        logger.info("主窗口已恢复显示")
 
     def chart_window_closed(self):
         self.chart_window = None
@@ -1293,8 +1684,7 @@ class HeartRateMonitor:
             asyncio.run_coroutine_threadsafe(self.client.disconnect(), self.loop)
         if self.loop.is_running():
             self.loop.call_soon_threadsafe(self.loop.stop)
-        if self.tray_icon:
-            self.tray_icon.stop()
+        # 托盘图标是 daemon 线程，进程退出后自动销毁，不显式 stop（避免死锁）
         if self.chart_window:
             self.chart_window.close()
         QApplication.quit()
@@ -1313,7 +1703,7 @@ class HeartRateMonitor:
         try:
             sys.exit(self.app.exec_())
         except Exception as e:
-            print(f"运行时异常: {e}")
+            logger.critical(f"运行时异常: {e}")
             traceback.print_exc()
 
 if __name__ == "__main__":
@@ -1321,6 +1711,6 @@ if __name__ == "__main__":
         monitor = HeartRateMonitor()
         monitor.run()
     except Exception as e:
-        print("程序崩溃:", e)
+        logger.critical(f"程序崩溃: {e}")
         traceback.print_exc()
         input("按回车键退出...")
