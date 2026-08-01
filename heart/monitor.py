@@ -194,7 +194,7 @@ class HeartRateMonitor:
 
     async def _scan_and_update(self):
         try:
-            self.devices = await BleakScanner.discover(timeout=8.0)
+            self.devices = await BleakScanner.discover(timeout=2.0)
             self._ui.scan_devices.emit(self.devices)
         except Exception as e:
             logger.error(f"扫描失败: {e}")
