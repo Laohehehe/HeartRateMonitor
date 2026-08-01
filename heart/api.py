@@ -42,8 +42,8 @@ class AppAPI:
 
     # ===================== 扫描 / 连接 =====================
     def scan(self, timeout: float = 8.0) -> List[Dict[str, str]]:
-        """扫描蓝牙设备（阻塞至完成），返回 [{'name', 'address'}, ...]。"""
-        fut = asyncio.run_coroutine_threadsafe(self._m._scan_and_update(), self._m.loop)
+        """扫描蓝牙设备（阻塞至完成），timeout 为实际扫描时长，返回 [{'name', 'address'}, ...]。"""
+        fut = asyncio.run_coroutine_threadsafe(self._m._scan_and_update(timeout), self._m.loop)
         fut.result(timeout + 5)
         return [{"name": d.name or "", "address": d.address} for d in self._m.devices]
 

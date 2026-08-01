@@ -697,6 +697,15 @@ class MainWindow(QMainWindow):
     # ===================== 最小化/托盘/关闭动画 =====================
     def _fade_out_animation(self, callback):
         """窗口淡出动画（windowOpacity），动画结束后调用 callback。"""
+        # 先停止并清理上一次动画，避免快速连点时旧动画仍运行/回调重复触发
+        old_anim = getattr(self, "_fade_anim", None)
+        if old_anim is not None:
+            try:
+                old_anim.stop()
+                old_anim.finished.disconnect()
+                old_anim.deleteLater()
+            except Exception:
+                pass
         self._fade_anim = QPropertyAnimation(self, b"windowOpacity")
         self._fade_anim.setDuration(150)
         self._fade_anim.setStartValue(self.windowOpacity())

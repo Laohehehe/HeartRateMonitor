@@ -371,7 +371,17 @@ class ChartWindow(QWidget):
 
     def _on_close_anim_finished(self):
         self.monitor.chart_window_closed()
+        self._closing = True
         self.close()
+
+    def closeEvent(self, event):
+        """系统关闭（如 Alt+F4）也走淡出动画并清理状态，避免 chart_window 引用残留。"""
+        if getattr(self, "_closing", False):
+            event.accept()
+            return
+        self._closing = True
+        self.animate_close()
+        event.ignore()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

@@ -29,7 +29,8 @@ class ModernProgressBar(QWidget):
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_animation)
-        self.timer.start(30)
+        # 只设间隔不启动：空闲时不消耗 CPU，start_animation() 的无参 start() 复用 30ms
+        self.timer.setInterval(30)
 
     def _get_current_width(self):
         return self._current_width

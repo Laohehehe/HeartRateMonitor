@@ -26,6 +26,7 @@ from .resources import resource_path
 from .config import load_config
 from .sounds import play_system_sound
 from .updater import UpdateSignal, _check_update_thread, _download_update_thread, _apply_update
+from .toast import signal as toast_signal, notify_update_ready
 from .ui.dispatcher import GuiDispatcher, RestoreHelper
 from .ui.main_window import MainWindow
 from .ui.heart_window import HeartRateWindow
@@ -76,6 +77,10 @@ class HeartRateMonitor:
         self._update_signal.download_done.connect(self._on_download_done)
         threading.Thread(target=_check_update_thread, args=(self._update_signal,), daemon=True).start()
 
+        # ===== 待更新标记（下载完成时设置）=====
+        self._pending_update_exe = None
+        self._new_version = None
+
         # ===== 托盘线程 → 主线程 =====
         self._restore_helper = RestoreHelper()
         self._restore_helper.restore.connect(self._do_restore)
@@ -117,6 +122,12 @@ class HeartRateMonitor:
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_display)
         self.update_timer.start(500)
+
+        # ===== Toast 通知信号与单实例激活轮询（需 QApplication 已创建）=====
+        toast_signal().action.connect(self._on_toast_action)
+        self._activate_timer = QTimer()
+        self._activate_timer.timeout.connect(self._check_activate_request)
+        self._activate_timer.start(1000)
 
         QTimer.singleShot(500, self.start_scan)
 
@@ -164,22 +175,47 @@ class HeartRateMonitor:
         self.loop.run_forever()
 
     # ===================== 自动更新回调 =====================
-    def _on_update_ready(self, version, download_url):
+    def _on_update_ready(self, version, download_url, sha256):
         """主线程：发现新版本，在后台线程下载（避免阻塞 UI）。"""
         logger.info(f"发现新版本: {version}，开始后台下载（使用镜像加速）")
+        self._new_version = version
         threading.Thread(
             target=_download_update_thread,
-            args=(version, download_url, self._update_signal),
+            args=(version, download_url, sha256, self._update_signal),
             daemon=True
         ).start()
 
     def _on_download_done(self, new_exe):
-        """主线程：下载完成，应用更新。"""
-        logger.info(f"下载完成，准备应用更新: {new_exe}")
+        """主线程：下载完成，发送通知并等待用户选择更新时机（不自动重启）。"""
+        logger.info(f"下载完成，等待用户选择更新时机: {new_exe}")
+        self._pending_update_exe = new_exe
         try:
-            if _apply_update(new_exe):
-                logger.info("更新完成，程序即将重启")
-                QTimer.singleShot(500, self.quit_app)
+            if not notify_update_ready(self._new_version or "新版本"):
+                logger.info("Toast 通知不可用，用户可在退出时自动更新")
+        except Exception as e:
+            logger.error(f"发送更新通知失败: {e}")
+
+    def _on_toast_action(self, action):
+        """主线程：处理 Toast 按钮点击。"""
+        if action == "restart":
+            logger.info("用户选择立即重启更新")
+            self._apply_pending_update(restart=True)
+        elif action == "later":
+            logger.info("用户选择退出时更新")
+        else:
+            # 点击通知正文 → 主窗口提到前台
+            self._do_restore()
+
+    def _apply_pending_update(self, restart):
+        exe = self._pending_update_exe
+        if not exe:
+            return
+        self._pending_update_exe = None
+        try:
+            if _apply_update(exe, restart=restart):
+                if restart:
+                    logger.info("更新完成，程序即将重启")
+                    QTimer.singleShot(500, self.quit_app)
             else:
                 logger.warning("更新失败：无法应用更新")
         except Exception as e:
@@ -192,9 +228,9 @@ class HeartRateMonitor:
         self.main_window.device_list.addItem("正在扫描设备...")
         asyncio.run_coroutine_threadsafe(self._scan_and_update(), self.loop)
 
-    async def _scan_and_update(self):
+    async def _scan_and_update(self, timeout: float = 2.0):
         try:
-            self.devices = await BleakScanner.discover(timeout=2.0)
+            self.devices = await BleakScanner.discover(timeout=timeout)
             self._ui.scan_devices.emit(self.devices)
         except Exception as e:
             logger.error(f"扫描失败: {e}")
@@ -226,7 +262,7 @@ class HeartRateMonitor:
         self.connecting = True
         self.reconnecting = True
         self.main_window.set_connecting_state(True)
-        logger.info(f"连接设备: {device.name} ({device.address})")
+        logger.info(f"连接设备: {device.name} (…{device.address[-4:]})")
 
         if not self.hr_window:
             self.hr_window = HeartRateWindow(self)
@@ -271,9 +307,12 @@ class HeartRateMonitor:
                     hr_uuid = None
                     for service in client.services:
                         for char in service.characteristics:
-                            if "Heart Rate Measurement" in char.description:
+                            if (char.uuid.lower() == "00002a37-0000-1000-8000-00805f9b34fb"
+                                    or "Heart Rate Measurement" in char.description):
                                 hr_uuid = char.uuid
                                 break
+                        if hr_uuid:
+                            break
                     if not hr_uuid:
                         raise Exception("未找到心率特征值")
 
@@ -323,9 +362,13 @@ class HeartRateMonitor:
                     self.hr_max_value = hr
                 if self.hr_min_value is None or hr < self.hr_min_value:
                     self.hr_min_value = hr
-        except Exception:
+        except (IndexError, ValueError):
             self.heart_rate.put("ERR")
             logger.debug("心率数据解析失败", exc_info=True)
+        except Exception:
+            # 兜底：异常数据格式不应导致程序崩溃
+            self.heart_rate.put("ERR")
+            logger.debug("心率数据解析异常", exc_info=True)
 
     def update_display(self):
         # 循环取空队列，避免高频率数据积压导致显示延迟
@@ -386,6 +429,12 @@ class HeartRateMonitor:
         self.main_window.setWindowState(self.main_window.windowState() & ~Qt.WindowMinimized)
         logger.info("主窗口已恢复显示")
 
+    def _check_activate_request(self):
+        """单实例：若后开实例请求激活，把主窗口提到前台。"""
+        from .singleton import activate_requested
+        if activate_requested():
+            self._do_restore()
+
     def chart_window_closed(self):
         self.chart_window = None
 
@@ -402,11 +451,28 @@ class HeartRateMonitor:
 
     # ===================== 退出 =====================
     def quit_app(self):
+        # 若有待应用更新（用户选"退出时更新"），退出时替换 exe（下次启动即新版，不重启）
+        pending = self._pending_update_exe
+        if pending:
+            self._pending_update_exe = None
+            try:
+                _apply_update(pending, restart=False)
+            except Exception as e:
+                logger.error(f"退出时应用更新失败: {e}")
         if self.hr_window:
             self.hr_window.save_position()
         self.reconnecting = False
+        # 先真正断开 BLE 再退出：run_coroutine_threadsafe 是异步调度，
+        # 若不等待，紧接着的 loop.stop() 会让断开协程来不及执行，设备保持被占用。
         if self.client and self.client.is_connected:
-            asyncio.run_coroutine_threadsafe(self.client.disconnect(), self.loop)
+            try:
+                fut = asyncio.run_coroutine_threadsafe(self.client.disconnect(), self.loop)
+                fut.result(timeout=3.0)  # 等待断开完成（最多 3 秒）
+                play_system_sound("Windows Hardware Remove")  # 与"断开连接"按钮一致
+            except TimeoutError:
+                logger.warning("BLE 断开超时，进程仍将退出")
+            except Exception:
+                pass
         if self.loop.is_running():
             self.loop.call_soon_threadsafe(self.loop.stop)
         # 清理主题过渡动画，避免析构期崩溃
@@ -414,6 +480,12 @@ class HeartRateMonitor:
         # 托盘图标是 daemon 线程，进程退出后自动销毁，不显式 stop（避免死锁）
         if self.chart_window:
             self.chart_window.close()
+        # 退出时清理临时文件（heart_*.log 与 _MEI* 解压残留）
+        try:
+            from .cleanup import cleanup_temp_files
+            cleanup_temp_files()
+        except Exception:
+            pass
         QApplication.quit()
 
     def _load_tray_image(self):
