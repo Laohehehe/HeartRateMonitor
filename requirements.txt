@@ -1,0 +1,4 @@
+PyQt5>=5.15
+bleak>=0.21
+pystray>=0.19
+Pillow>=9.0
