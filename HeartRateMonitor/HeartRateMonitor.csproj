@@ -10,9 +10,9 @@
     <ApplicationIcon>Assets\tray_icon.ico</ApplicationIcon>
 
     <!-- 版本号：按仓库既有规则使用发布日期 26.11.13 -->
-    <Version>26.11.13</Version>
-    <AssemblyVersion>26.11.13.0</AssemblyVersion>
-    <FileVersion>26.11.13.0</FileVersion>
+    <Version>26.11.13.1</Version>
+    <AssemblyVersion>26.11.13.1</AssemblyVersion>
+    <FileVersion>26.11.13.1</FileVersion>
     <Product>心率监测 HeartRate Monitor</Product>
     <Company>Laohehehe</Company>
     <Description>蓝牙心率数据实时显示与记录</Description>
@@ -49,4 +49,22 @@
     <Content Include="Assets\tray_icon.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!--
+    重要：dotnet publish 不会自动复制 WinUI 3 的两类关键产物：
+      · *.xbf   —— 编译后的 XAML 二进制，InitializeComponent() 运行时按它加载界面；
+      · <程序集名>.pri —— 应用的资源索引。
+    缺任意一个，发布版启动时会在 InitializeComponent 里直接崩溃
+    （实测退出码 0xC0000409，日志停在“MainWindow: 开始构造”之后）。
+    这里在 Publish 结束后显式补齐。
+  -->
+  <Target Name="CopyXamlArtifactsToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_XamlArtifact Include="$(TargetDir)**\*.xbf" />
+      <_XamlArtifact Include="$(TargetDir)$(AssemblyName).pri" Condition="Exists('$(TargetDir)$(AssemblyName).pri')" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(_XamlArtifact)"
+      DestinationFiles="@(_XamlArtifact->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+  </Target>
 </Project>

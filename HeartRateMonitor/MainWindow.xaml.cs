@@ -21,28 +21,41 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
+        AppLogger.Debug("MainWindow: 开始构造");
+
         InitializeComponent();
+        AppLogger.Debug("MainWindow: InitializeComponent 完成");
 
         Title = "心率监测器";
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
+        AppLogger.Debug("MainWindow: 标题栏完成");
 
         _backdropHost = new BackdropHost(this, RootGrid);
+        AppLogger.Debug("MainWindow: BackdropHost 构造完成");
 
         ResizeWindow();
         ApplyBackdrop();
+        AppLogger.Debug("MainWindow: 背景材质应用完成");
 
         // 设置页切换背景后即时生效
         BackdropService.Changed += OnBackdropSettingChanged;
 
         InitializeTray();
+        AppLogger.Debug("MainWindow: 托盘初始化完成");
+
         AppWindow.Closing += OnAppWindowClosing;
 
         RootFrame.Navigate(typeof(HomePage));
+        AppLogger.Debug("MainWindow: HomePage 导航完成");
+
         NavView.SelectedItem = NavView.MenuItems[0];
+        AppLogger.Debug("MainWindow: 侧边栏选中完成");
 
         Closed += OnClosed;
+
+        AppLogger.Debug("MainWindow: 构造结束");
     }
 
     private BackdropHost? _backdropHost;

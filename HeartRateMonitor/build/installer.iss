@@ -10,7 +10,7 @@
 ; ============================================================================
 
 #define MyAppName "心率监测器"
-#define MyAppVersion "26.11.13"
+#define MyAppVersion "26.11.13.1"
 #define MyAppPublisher "Laohehehe"
 #define MyAppExeName "HeartRateMonitor.exe"
 #define MyAppUrl "https://github.com/Laohehehe/HeartRateMonitor"
