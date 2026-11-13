@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="HeartRateMonitor.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <ScrollViewer>
+        <Grid Padding="24,4,24,24" RowSpacing="16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!--  页面标题  -->
+            <StackPanel Grid.Row="0" Spacing="4">
+                <TextBlock Style="{StaticResource TitleTextBlockStyle}" Text="设置" />
+                <TextBlock
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    Text="界面外观设置，修改后立即生效并自动保存。"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+
+            <!--  窗口背景材质  -->
+            <Border
+                Grid.Row="1"
+                Padding="20"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Spacing="12">
+                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="窗口背景材质" />
+
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="Windows 的窗口背景只有「云母」和「亚克力」两大类材质。模糊不是独立材质，它只是亚克力五层组成（背景捕获 / 模糊 / 排除混合 / 色调 / 噪点）中的一层，因此并不存在「无噪点的纯模糊」这种窗口背景材质。"
+                        TextWrapping="Wrap" />
+
+                    <RadioButtons x:Name="BackdropOptions" SelectionChanged="OnBackdropSelectionChanged">
+                        <x:String>亚克力（Acrylic）</x:String>
+                        <x:String>亚克力 · 薄（Acrylic Thin）</x:String>
+                        <x:String>云母（Mica）</x:String>
+                        <x:String>云母 Alt（Mica Alt）</x:String>
+                        <x:String>纯色（不使用材质）</x:String>
+                    </RadioButtons>
+
+                    <TextBlock
+                        x:Name="DetailText"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        TextWrapping="Wrap" />
+
+                    <InfoBar
+                        x:Name="StatusBar"
+                        IsClosable="True"
+                        IsOpen="False"
+                        Severity="Informational" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </ScrollViewer>
+</Page>

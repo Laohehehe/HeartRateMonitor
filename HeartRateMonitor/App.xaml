@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Application
+    x:Class="HeartRateMonitor.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- 应用主题色（沿用旧版软件的粉色心率视觉） -->
+            <SolidColorBrush x:Key="HeartAccentBrush" Color="#FF4D8D" />
+            <SolidColorBrush x:Key="HeartAccentSubtleBrush" Color="#26FF4D8D" />
+        </ResourceDictionary>
+    </Application.Resources>
+
+</Application>

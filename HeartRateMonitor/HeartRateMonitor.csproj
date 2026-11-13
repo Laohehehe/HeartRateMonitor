@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>HeartRateMonitor</RootNamespace>
+    <AssemblyName>HeartRateMonitor</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\tray_icon.ico</ApplicationIcon>
+
+    <!-- 版本号：按仓库既有规则使用发布日期 26.11.13 -->
+    <Version>26.11.13</Version>
+    <AssemblyVersion>26.11.13.0</AssemblyVersion>
+    <FileVersion>26.11.13.0</FileVersion>
+    <Product>心率监测 HeartRate Monitor</Product>
+    <Company>Laohehehe</Company>
+    <Description>蓝牙心率数据实时显示与记录</Description>
+    <NeutralLanguage>zh-Hans</NeutralLanguage>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+
+    <!-- WinUI 3 / Windows App SDK -->
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260804001" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
+    <PackageReference Include="H.NotifyIcon.WinUI" Version="2.4.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      悬浮窗需要 GDI+（System.Drawing）→ 引用桌面框架的 WindowsForms 配置。
+      该配置只提供程序集引用，不启用 WinForms SDK 目标，因此不与 WinUI 的 XAML 编译冲突。
+    -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 托盘图标：随输出目录复制，运行期从 Assets\tray_icon.ico 读取 -->
+    <Content Include="Assets\tray_icon.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

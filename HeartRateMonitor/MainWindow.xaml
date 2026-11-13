@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="HeartRateMonitor.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:tb="using:H.NotifyIcon"
+    mc:Ignorable="d">
+
+    <Grid x:Name="RootGrid">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 自定义标题栏（同时作为窗口拖动区域） -->
+        <Grid x:Name="AppTitleBar" Grid.Row="0" Background="Transparent">
+            <StackPanel
+                Margin="16,0,0,0"
+                VerticalAlignment="Center"
+                Orientation="Horizontal"
+                Spacing="10">
+                <Viewbox Width="18" Height="18">
+                    <Path
+                        Data="M 12,21.35 L 10.55,20.03 C 5.4,15.36 2,12.28 2,8.5 C 2,5.42 4.42,3 7.5,3 C 9.24,3 10.91,3.81 12,5.09 C 13.09,3.81 14.76,3 16.5,3 C 19.58,3 22,5.42 22,8.5 C 22,12.28 18.6,15.36 13.45,20.04 L 12,21.35 Z"
+                        Fill="{StaticResource HeartAccentBrush}" />
+                </Viewbox>
+                <TextBlock
+                    VerticalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="心率监测器" />
+            </StackPanel>
+        </Grid>
+
+        <!-- 侧边栏 + 页面宿主 -->
+        <NavigationView
+            x:Name="NavView"
+            Grid.Row="1"
+            AlwaysShowHeader="False"
+            Background="Transparent"
+            IsBackButtonVisible="Collapsed"
+            IsPaneOpen="True"
+            IsSettingsVisible="False"
+            OpenPaneLength="196"
+            PaneDisplayMode="Left"
+            SelectionChanged="OnNavSelectionChanged">
+
+            <NavigationView.Resources>
+                <!-- 让 Mica 背景透上来 -->
+                <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+                <SolidColorBrush x:Key="NavigationViewPaneBackground" Color="Transparent" />
+            </NavigationView.Resources>
+
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="实时监测" Tag="monitor">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Home" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <NavigationViewItem Content="心率曲线" Tag="chart">
+                    <NavigationViewItem.Icon>
+                        <!--  空心心形：F0 为 even-odd 填充规则，内部再画一个缩小心形挖空  -->
+                        <PathIcon Data="F0 M 12,21.35 L 10.55,20.03 C 5.4,15.36 2,12.28 2,8.5 C 2,5.42 4.42,3 7.5,3 C 9.24,3 10.91,3.81 12,5.09 C 13.09,3.81 14.76,3 16.5,3 C 19.58,3 22,5.42 22,8.5 C 22,12.28 18.6,15.36 13.45,20.04 L 12,21.35 Z M 12,18.17 L 11.04,17.3 C 7.64,14.22 5.4,12.19 5.4,9.69 C 5.4,7.66 7,6.06 9.03,6.06 C 10.18,6.06 11.28,6.6 12,7.44 C 12.72,6.6 13.82,6.06 14.97,6.06 C 17,6.06 18.6,7.66 18.6,9.69 C 18.6,12.19 16.36,14.22 12.96,17.31 L 12,18.17 Z" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <NavigationViewItem Content="设置" Tag="settings">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Setting" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+
+            <Frame x:Name="RootFrame" />
+        </NavigationView>
+
+        <!--
+            系统托盘图标（H.NotifyIcon）：
+            左键双击 = 恢复主界面（代码里挂 DoubleClickCommand），右键 = WinUI Flyout 菜单。
+
+            菜单模式用 ContextMenuMode="SecondWindow"：由库在独立透明窗口里渲染真正的
+            WinUI MenuFlyout（圆角 / 亚克力 / 主题跟随）。
+
+            已知限制：该辅助窗口宽度由库内部固定，长文字会被裁断（实测「显示主界面」只剩
+            「显示主」）。调大宿主元素尺寸无效，因此这里把菜单文字统一压到 ≤3 字。
+        -->
+        <Canvas
+            Grid.Row="0"
+            Grid.RowSpan="2"
+            IsHitTestVisible="False">
+            <tb:TaskbarIcon
+                x:Name="TrayIcon"
+                Width="320"
+                Height="200"
+                Canvas.Left="0"
+                Canvas.Top="0"
+                ContextMenuMode="SecondWindow"
+                MenuActivation="RightClick"
+                Opacity="0"
+                ToolTipText="心率监测器">
+
+            <tb:TaskbarIcon.ContextFlyout>
+                <MenuFlyout>
+                    <!--
+                        SecondWindow 模式渲染的是真正的 WinUI MenuFlyout，支持 MenuFlyoutItem.Icon。
+                        文字保持 ≤3 字：该模式的辅助窗口会裁断长文字。
+                    -->
+                    <MenuFlyoutItem Click="OnTrayShowClick" Text="主界面">
+                        <MenuFlyoutItem.Icon>
+                            <SymbolIcon Symbol="Home" />
+                        </MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+
+                    <ToggleMenuFlyoutItem
+                        x:Name="TrayPinItem"
+                        Click="OnTrayPinClick"
+                        Text="固定">
+                        <ToggleMenuFlyoutItem.Icon>
+                            <SymbolIcon Symbol="Pin" />
+                        </ToggleMenuFlyoutItem.Icon>
+                    </ToggleMenuFlyoutItem>
+
+                    <MenuFlyoutSeparator />
+
+                    <MenuFlyoutItem Click="OnTrayExitClick" Text="退出">
+                        <MenuFlyoutItem.Icon>
+                            <SymbolIcon Symbol="ClosePane" />
+                        </MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                </MenuFlyout>
+            </tb:TaskbarIcon.ContextFlyout>
+            </tb:TaskbarIcon>
+        </Canvas>
+    </Grid>
+</Window>
