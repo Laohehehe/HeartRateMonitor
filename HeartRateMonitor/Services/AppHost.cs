@@ -38,7 +38,7 @@ public sealed class AppHost
     private DispatcherQueue? _ui;
     private HeartOverlayWindow? _floatingWindow;
 
-    /// <summary>专供 OBS 采集的普通窗口（纯黑底，COM 采集器可抓）。</summary>
+    /// <summary>专供 OBS 采集的普通窗口（纯绿底，供色度键抠像）。</summary>
     private HeartOverlayWindow? _obsWindow;
 
     /// <summary>最近一次的显示文本，用于新建窗口时立即同步。</summary>
@@ -188,7 +188,7 @@ public sealed class AppHost
         return _floatingWindow;
     }
 
-    /// <summary>创建（或复用）专供 OBS 采集的普通窗口：纯黑底、出现在任务栏。</summary>
+    /// <summary>创建（或复用）专供 OBS 采集的普通窗口：纯绿底、出现在任务栏、不置顶。</summary>
     private HeartOverlayWindow EnsureObsWindow()
     {
         if (_obsWindow is not null) return _obsWindow;

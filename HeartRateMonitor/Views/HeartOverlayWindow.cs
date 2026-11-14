@@ -98,8 +98,13 @@ internal sealed class HeartOverlayWindow : IDisposable
         // 透明窗额外带 WS_EX_TOOLWINDOW：OBS 枚举窗口时会跳过 Tool 窗口
         // （libobs window-helpers.c 的 check_window_valid），
         // 于是 OBS 下拉列表里只剩真正可采集的 OBS 窗，用户不会误选到采不出画面的透明窗。
-        var exStyle = WsExTopmost | WsExNoActivate
-                      | (_obsCompatible ? WsExAppWindow : WsExLayered | WsExToolWindow);
+        //
+        // 注意 OBS 窗不带 WS_EX_TOPMOST：它只是给采集用的绿底窗，置顶会盖住桌面很扎眼；
+        // 而 OBS 的 WGC 采集不受窗口被遮挡影响，所以不置顶完全不影响采集。
+        var exStyle = WsExNoActivate
+                      | (_obsCompatible
+                          ? WsExAppWindow
+                          : WsExLayered | WsExTopmost | WsExToolWindow);
 
         _hwnd = CreateWindowEx(
             exStyle,
@@ -156,7 +161,9 @@ internal sealed class HeartOverlayWindow : IDisposable
         if (_hwnd == IntPtr.Zero) return;
 
         ShowWindow(_hwnd, SwShowNoActivate);
-        SetWindowPos(_hwnd, HwndTopMost, 0, 0, 0, 0,
+
+        // 透明悬浮窗始终置顶；OBS 采集窗保持普通 Z 序（用 NOTOPMOST 显式清掉置顶属性）。
+        SetWindowPos(_hwnd, _obsCompatible ? HwndNoTopMost : HwndTopMost, 0, 0, 0, 0,
             SwpNoMove | SwpNoSize | SwpNoActivate | SwpShowWindow);
 
         Render();
@@ -269,7 +276,7 @@ internal sealed class HeartOverlayWindow : IDisposable
         }
     }
 
-    /// <summary>把当前一帧画到位图。opaque=true 时用纯黑底（OBS 兼容模式，供抠色）。</summary>
+    /// <summary>把当前一帧画到位图。opaque=true 时用纯绿底（OBS 兼容模式，供色度键抠色）。</summary>
     private Bitmap BuildFrame(bool opaque)
     {
         var seconds = _clock.Elapsed.TotalSeconds;
@@ -280,7 +287,7 @@ internal sealed class HeartOverlayWindow : IDisposable
         var bitmap = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
         using var graphics = Graphics.FromImage(bitmap);
 
-        graphics.Clear(opaque ? Color.Black : Color.Transparent);
+        graphics.Clear(opaque ? ObsBackground : Color.Transparent);
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
         graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
@@ -575,7 +582,13 @@ internal sealed class HeartOverlayWindow : IDisposable
     private const uint UlwAlpha = 0x00000002;
     private const int IdcArrow = 32512;
 
+    /// <summary>OBS 窗的纯绿底色：色度键的标准键色，白字/粉心与绿色的色度差异大，抠得干净。</summary>
+    private static readonly Color ObsBackground = Color.FromArgb(255, 0, 255, 0);
+
     private static readonly IntPtr HwndTopMost = new(-1);
+
+    /// <summary>HWND_NOTOPMOST：把窗口放回普通 Z 序。</summary>
+    private static readonly IntPtr HwndNoTopMost = new(-2);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Point

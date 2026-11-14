@@ -77,7 +77,7 @@
                     <TextBlock
                         Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                         Style="{StaticResource CaptionTextBlockStyle}"
-                        Text="OBS 无法采集逐像素透明的分层窗口（BitBlt 黑屏、WGC 无画面）。开启后会在主屏右侧额外出现一个纯黑底的普通窗口，专供 OBS 采集（窗口标题为 HeartRateOverlay (OBS)，在 OBS 的窗口列表里选它）。透明悬浮窗保持不变、照常使用；给采集源加「色彩键」把黑底抠掉即可透明叠加。"
+                        Text="OBS 无法采集逐像素透明的分层窗口（BitBlt 黑屏、WGC 无画面）。开启后会在主屏右侧额外出现一个纯绿底的普通窗口，专供 OBS 采集（窗口标题为 HeartRateOverlay (OBS)，在 OBS 的窗口列表里选它；该窗口不置顶，被其他窗口挡住也不影响 WGC 采集）。透明悬浮窗保持不变、照常使用；给采集源加「色度键」把绿底抠掉即可透明叠加。"
                         TextWrapping="Wrap" />
                     <ToggleSwitch
                         x:Name="ObsModeSwitch"
