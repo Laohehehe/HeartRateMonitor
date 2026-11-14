@@ -19,6 +19,13 @@ public static class AppConfig
 
     static AppConfig() => Load();
 
+    /// <summary>悬浮窗 OBS 兼容模式：改用普通窗口 + 纯黑底，便于 OBS 采集后抠色。</summary>
+    public static bool OverlayObsCompatible
+    {
+        get => Get("HeartRateWindow", "obsCompatible", "false") == "true";
+        set => Set("HeartRateWindow", "obsCompatible", value ? "true" : "false");
+    }
+
     /// <summary>窗口背景效果："acrylic"（亚克力/Blur）、"mica"（云母）、"none"（纯色）。</summary>
     public static string Backdrop
     {

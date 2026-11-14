@@ -21,7 +21,12 @@ namespace HeartRateMonitor.Views;
 internal sealed class HeartOverlayWindow : IDisposable
 {
     private const string WindowClass = "HeartRateMonitor.HeartOverlay";
+
+    /// <summary>透明悬浮窗标题。它带 WS_EX_TOOLWINDOW，不会出现在 OBS 的窗口列表里。</summary>
     private const string WindowTitle = "HeartRateOverlay";
+
+    /// <summary>OBS 采集窗标题：加 (OBS) 后缀，方便在 OBS 窗口列表里一眼认出该选哪个。</summary>
+    private const string WindowTitleObs = "HeartRateOverlay (OBS)";
 
     private const int Width = 220;
     private const int Height = 170;
@@ -43,37 +48,73 @@ internal sealed class HeartOverlayWindow : IDisposable
 
     private static bool _classRegistered;
 
-    private readonly WndProcDelegate _wndProc; // 必须持有引用，防止被 GC 回收
+    // 窗口类是全进程共享的，只能注册一个 WndProc。
+    // 两个悬浮窗（透明窗 / OBS 窗）共用同一个类，因此必须用静态 WndProc + 按 hwnd 分发，
+    // 否则第二个窗口的消息会全部落到第一个实例上（表现为 OBS 窗永不绘制）。
+    private static readonly WndProcDelegate SharedWndProc = StaticWndProc;
+
+    private static readonly System.Collections.Generic.Dictionary<IntPtr, HeartOverlayWindow> Instances = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
 
     private IntPtr _hwnd;
+
+    /// <summary>隐藏的属主窗口：用来隐藏任务栏/Alt+Tab 项，同时保持本窗口是“普通窗口”。</summary>
+    private IntPtr _ownerHwnd;
     private string _text = "--";
     private bool _disposed;
     private int? _bpm;
+
+    /// <summary>OBS 兼容模式：不用分层窗口，改用普通窗口 + 纯色可抠底。</summary>
+    private readonly bool _obsCompatible;
+
+    /// <summary>是否读写共享的悬浮窗位置配置。OBS 输出窗不参与，避免两个窗口抢同一份坐标。</summary>
+    private readonly bool _persistPosition;
 
     /// <summary>窗口位置（每次渲染前从系统同步，避免被外部移动后跳回）。</summary>
     private int _left;
     private int _top;
 
-    public HeartOverlayWindow()
+    public HeartOverlayWindow(bool obsCompatible = false, bool persistPosition = true)
     {
-        _wndProc = WndProc;
+        _obsCompatible = obsCompatible;
+        _persistPosition = persistPosition;
         EnsureClassRegistered();
 
         var (left, top) = ResolveInitialPosition();
 
+        // 先建一个永不显示的属主窗口。
+        // 关键：OBS 等录屏软件只枚举“普通窗口”，带 WS_EX_TOOLWINDOW 的窗口会被过滤掉；
+        // 但完全不隐藏又会在任务栏/Alt+Tab 里出现。用属主窗口即可两全——
+        // 这与归档版 WPF 实现（ShowInTaskbar=false 产生的隐藏属主 + 去掉 WS_EX_APPWINDOW）思路一致。
+        _ownerHwnd = CreateWindowEx(
+            0, WindowClass, string.Empty, WsPopup,
+            0, 0, 0, 0,
+            IntPtr.Zero, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
+
+        // 兼容模式：普通窗口，并强制出现在任务栏（WS_EX_APPWINDOW）。
+        // 原因：部分录屏 / 采集工具只枚举任务栏或 Alt+Tab 中可见的窗口；
+        // 正常模式则用分层窗口保持逐像素透明。
+        //
+        // 透明窗额外带 WS_EX_TOOLWINDOW：OBS 枚举窗口时会跳过 Tool 窗口
+        // （libobs window-helpers.c 的 check_window_valid），
+        // 于是 OBS 下拉列表里只剩真正可采集的 OBS 窗，用户不会误选到采不出画面的透明窗。
+        var exStyle = WsExTopmost | WsExNoActivate
+                      | (_obsCompatible ? WsExAppWindow : WsExLayered | WsExToolWindow);
+
         _hwnd = CreateWindowEx(
-            WsExLayered | WsExTopmost | WsExToolWindow | WsExNoActivate,
+            exStyle,
             WindowClass,
-            WindowTitle,
+            _obsCompatible ? WindowTitleObs : WindowTitle,
             WsPopup,
             left, top, Width, Height,
-            IntPtr.Zero, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
+            _ownerHwnd, IntPtr.Zero, GetModuleHandle(null), IntPtr.Zero);
 
         if (_hwnd == IntPtr.Zero)
         {
             throw new InvalidOperationException($"创建悬浮窗失败（{Marshal.GetLastWin32Error()}）");
         }
+
+        Instances[_hwnd] = this;
 
         _left = left;
         _top = top;
@@ -124,6 +165,7 @@ internal sealed class HeartOverlayWindow : IDisposable
     /// <summary>把当前位置写入配置。</summary>
     public void SavePosition()
     {
+        if (!_persistPosition) return;
         if (_hwnd == IntPtr.Zero) return;
 
         if (GetWindowRect(_hwnd, out var rect))
@@ -151,6 +193,12 @@ internal sealed class HeartOverlayWindow : IDisposable
         SavePosition();
         DestroyWindow(_hwnd);
         _hwnd = IntPtr.Zero;
+
+        if (_ownerHwnd != IntPtr.Zero)
+        {
+            DestroyWindow(_ownerHwnd);
+            _ownerHwnd = IntPtr.Zero;
+        }
     }
 
     public void Dispose()
@@ -164,15 +212,28 @@ internal sealed class HeartOverlayWindow : IDisposable
 
     // ---------------- 位置 ----------------
 
-    private static (int Left, int Top) ResolveInitialPosition()
+    private (int Left, int Top) ResolveInitialPosition()
     {
-        var left = AppConfig.HeartRateWindowX ?? DefaultLeft;
-        var top = AppConfig.HeartRateWindowY ?? DefaultTop;
-
         var vLeft = GetSystemMetrics(SmXVirtualScreen);
         var vTop = GetSystemMetrics(SmYVirtualScreen);
         var vWidth = GetSystemMetrics(SmCxVirtualScreen);
         var vHeight = GetSystemMetrics(SmCyVirtualScreen);
+
+        // OBS 输出窗：不读共享配置，固定贴在「主屏」右上角。
+        // 注意要用主屏尺寸而不是虚拟桌面——多显示器时虚拟桌面原点可能为负，
+        // 直接把窗口放到屏幕外就采集不到了。
+        if (!_persistPosition)
+        {
+            var screenW = GetSystemMetrics(SmCxScreen);
+            var screenH = GetSystemMetrics(SmCyScreen);
+            if (screenW <= 0) screenW = 1920;
+            if (screenH <= 0) screenH = 1080;
+
+            return (Math.Max(0, screenW - Width - 40), 80);
+        }
+
+        var left = AppConfig.HeartRateWindowX ?? DefaultLeft;
+        var top = AppConfig.HeartRateWindowY ?? DefaultTop;
 
         if (vWidth > 0 && vHeight > 0)
         {
@@ -185,35 +246,68 @@ internal sealed class HeartOverlayWindow : IDisposable
 
     // ---------------- 渲染 ----------------
 
-    /// <summary>按当前时间计算动画相位后整帧重绘。</summary>
+    /// <summary>按当前时间计算动画相位后重绘。</summary>
     private void Render()
     {
         if (_hwnd == IntPtr.Zero) return;
 
+        // OBS 兼容模式：窗口是普通窗口，走 WM_PAINT 绘制
+        if (_obsCompatible)
+        {
+            InvalidateRect(_hwnd, IntPtr.Zero, false);
+            return;
+        }
+
         try
         {
-            var seconds = _clock.Elapsed.TotalSeconds;
-            var bpm = Math.Clamp(_bpm ?? 75, 30, 220);
-            var beatPeriod = 60.0 / bpm;
-            var phase = seconds % beatPeriod / beatPeriod;
-
-            using var bitmap = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
-            using (var graphics = Graphics.FromImage(bitmap))
-            {
-                graphics.Clear(Color.Transparent);
-                graphics.SmoothingMode = SmoothingMode.AntiAlias;
-                graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-                graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-
-                DrawHeart(graphics, 1f + 0.16f * PulseEnvelope(phase));
-                DrawReadout(graphics, _text);
-            }
-
+            using var bitmap = BuildFrame(false);
             BlendToScreen(bitmap);
         }
         catch (Exception ex)
         {
             AppLogger.Error("渲染悬浮心率窗失败", ex);
+        }
+    }
+
+    /// <summary>把当前一帧画到位图。opaque=true 时用纯黑底（OBS 兼容模式，供抠色）。</summary>
+    private Bitmap BuildFrame(bool opaque)
+    {
+        var seconds = _clock.Elapsed.TotalSeconds;
+        var bpm = Math.Clamp(_bpm ?? 75, 30, 220);
+        var beatPeriod = 60.0 / bpm;
+        var phase = seconds % beatPeriod / beatPeriod;
+
+        var bitmap = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
+        using var graphics = Graphics.FromImage(bitmap);
+
+        graphics.Clear(opaque ? Color.Black : Color.Transparent);
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+        graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+        DrawHeart(graphics, 1f + 0.16f * PulseEnvelope(phase));
+        DrawReadout(graphics, _text);
+
+        return bitmap;
+    }
+
+    /// <summary>普通窗口模式：把一帧直接画到窗口 DC。</summary>
+    private void PaintToWindow(IntPtr hwnd)
+    {
+        var hdc = BeginPaint(hwnd, out var paintStruct);
+        try
+        {
+            using var bitmap = BuildFrame(true);
+            using var graphics = Graphics.FromHdc(hdc);
+            graphics.DrawImageUnscaled(bitmap, 0, 0);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("绘制悬浮心率窗失败", ex);
+        }
+        finally
+        {
+            EndPaint(hwnd, ref paintStruct);
         }
     }
 
@@ -358,10 +452,30 @@ internal sealed class HeartOverlayWindow : IDisposable
 
     // ---------------- 窗口过程 ----------------
 
-    private IntPtr WndProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam)
+    /// <summary>静态窗口过程：按句柄把消息转给对应实例；未注册的窗口（属主窗）走默认处理。</summary>
+    private static IntPtr StaticWndProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam)
+    {
+        HeartOverlayWindow? target;
+        if (Instances.TryGetValue(hwnd, out target) && target is not null)
+        {
+            return target.HandleMessage(hwnd, message, wParam, lParam);
+        }
+
+        return DefWindowProc(hwnd, message, wParam, lParam);
+    }
+
+    private IntPtr HandleMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam)
     {
         switch (message)
         {
+            case WmPaint:
+                if (_obsCompatible) PaintToWindow(hwnd);
+                return IntPtr.Zero;
+
+            case WmEraseBackground:
+                // 兼容模式下自己整帧重绘，避免背景先被擦成白色导致闪烁
+                return _obsCompatible ? new IntPtr(1) : IntPtr.Zero;
+
             case WmTimer:
                 Render();
                 return IntPtr.Zero;
@@ -376,7 +490,8 @@ internal sealed class HeartOverlayWindow : IDisposable
 
             case WmDestroy:
                 KillTimer(hwnd, new IntPtr(TimerId));
-                _hwnd = IntPtr.Zero;
+                Instances.Remove(hwnd);
+                if (hwnd == _hwnd) _hwnd = IntPtr.Zero;
                 return IntPtr.Zero;
         }
 
@@ -391,7 +506,7 @@ internal sealed class HeartOverlayWindow : IDisposable
         {
             Size = Marshal.SizeOf<WindowClassEx>(),
             Style = 0,
-            WndProc = _wndProc,
+            WndProc = SharedWndProc,
             ClsExtra = 0,
             WndExtra = 0,
             Instance = GetModuleHandle(null),
@@ -423,6 +538,9 @@ internal sealed class HeartOverlayWindow : IDisposable
     private const int WsExLayered = 0x00080000;
     private const int WsExTopmost = 0x00000008;
     private const int WsExToolWindow = 0x00000080;
+
+    /// <summary>WS_EX_APPWINDOW：强制在任务栏/Alt+Tab 中显示。</summary>
+    private const int WsExAppWindow = 0x00040000;
     private const int WsExNoActivate = 0x08000000;
     private const int WsExTransparent = 0x00000020;
 
@@ -440,7 +558,12 @@ internal sealed class HeartOverlayWindow : IDisposable
     private const uint WmExitSizeMove = 0x0232;
     private const uint WmDestroy = 0x0002;
     private const uint WmTimer = 0x0113;
+    private const uint WmPaint = 0x000F;
+    private const uint WmEraseBackground = 0x0014;
     private const int HtCaption = 2;
+
+    private const int SmCxScreen = 0;
+    private const int SmCyScreen = 1;
 
     private const int SmXVirtualScreen = 76;
     private const int SmYVirtualScreen = 77;
@@ -591,4 +714,29 @@ internal sealed class HeartOverlayWindow : IDisposable
     private static extern bool UpdateLayeredWindow(
         IntPtr hwnd, IntPtr destinationDc, ref Point destination, ref Size size,
         IntPtr sourceDc, ref Point source, int colorKey, ref BlendFunction blend, uint flags);
+
+    // ---- 普通窗口（OBS 兼容模式）绘制所需 ----
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PaintStruct
+    {
+        public IntPtr Hdc;
+        public int Erase;
+        public Rect Paint;
+        public int Restore;
+        public int IncUpdate;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+        public byte[] Reserved;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr BeginPaint(IntPtr hwnd, out PaintStruct paintStruct);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EndPaint(IntPtr hwnd, ref PaintStruct paintStruct);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool InvalidateRect(IntPtr hwnd, IntPtr rect, bool erase);
 }

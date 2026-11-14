@@ -37,6 +37,12 @@ public sealed class AppHost
 
     private DispatcherQueue? _ui;
     private HeartOverlayWindow? _floatingWindow;
+
+    /// <summary>专供 OBS 采集的普通窗口（纯黑底，COM 采集器可抓）。</summary>
+    private HeartOverlayWindow? _obsWindow;
+
+    /// <summary>最近一次的显示文本，用于新建窗口时立即同步。</summary>
+    private string _lastText = "--";
     private Microsoft.UI.Xaml.DispatcherTimer? _demoTimer;
     private bool _demoMode;
     private bool _initialized;
@@ -74,7 +80,9 @@ public sealed class AppHost
         {
             Post(() =>
             {
+                _lastText = text;
                 _floatingWindow?.SetHeartRateText(text);
+                _obsWindow?.SetHeartRateText(text);
                 StatusChanged?.Invoke(this, text);
             });
         };
@@ -99,7 +107,34 @@ public sealed class AppHost
     public async Task DisconnectAsync()
     {
         await Client.StopAsync().ConfigureAwait(true);
-        Post(() => _floatingWindow?.SetHeartRateText("--"));
+        Post(() =>
+        {
+            _lastText = "--";
+            _floatingWindow?.SetHeartRateText("--");
+            _obsWindow?.SetHeartRateText("--");
+        });
+    }
+
+    /// <summary>
+    /// 切换悬浮窗 OBS 兼容模式。窗口样式需要重建才能生效，这里直接重建悬浮窗。
+    /// </summary>
+    public void SetOverlayObsCompatible(bool value)
+    {
+        if (AppConfig.OverlayObsCompatible == value) return;
+
+        AppConfig.OverlayObsCompatible = value;
+
+        if (value)
+        {
+            EnsureObsWindow();
+        }
+        else
+        {
+            try { _obsWindow?.Dispose(); } catch { }
+            _obsWindow = null;
+        }
+
+        AppLogger.Info($"OBS 输出窗口已{(value ? "开启" : "关闭")}");
     }
 
     /// <summary>置顶并固定（固定后悬浮窗鼠标穿透、不可拖动）。</summary>
@@ -127,6 +162,8 @@ public sealed class AppHost
         {
             _floatingWindow?.SavePosition();
             _floatingWindow?.Close();
+            _obsWindow?.Close();
+            _obsWindow = null;
         }
         catch (Exception ex)
         {
@@ -141,9 +178,27 @@ public sealed class AppHost
     {
         if (_floatingWindow is not null) return _floatingWindow;
 
-        _floatingWindow = new HeartOverlayWindow();
+        // 悬浮窗本体永远是透明分层窗口；OBS 采集用独立的普通窗口
+        _floatingWindow = new HeartOverlayWindow(obsCompatible: false);
         _floatingWindow.SetFixed(IsPinned);
+        _floatingWindow.SetHeartRateText(_lastText);
+
+        if (AppConfig.OverlayObsCompatible) EnsureObsWindow();
+
         return _floatingWindow;
+    }
+
+    /// <summary>创建（或复用）专供 OBS 采集的普通窗口：纯黑底、出现在任务栏。</summary>
+    private HeartOverlayWindow EnsureObsWindow()
+    {
+        if (_obsWindow is not null) return _obsWindow;
+
+        _obsWindow = new HeartOverlayWindow(obsCompatible: true, persistPosition: false);
+        _obsWindow.SetHeartRateText(_lastText);
+        _obsWindow.ShowWithoutActivating();
+
+        AppLogger.Info("OBS 输出窗口已创建");
+        return _obsWindow;
     }
 
     /// <summary>把一次心率读数送进统一管线（历史 + 悬浮窗 + 页面）。</summary>
@@ -152,7 +207,9 @@ public sealed class AppHost
         History.Add(value);
         Post(() =>
         {
+            _lastText = value.ToString();
             _floatingWindow?.SetHeartRate(value);
+            _obsWindow?.SetHeartRate(value);
             HeartRateUpdated?.Invoke(this, value);
         });
     }

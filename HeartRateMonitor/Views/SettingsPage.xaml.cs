@@ -1,4 +1,5 @@
 using System;
+using HeartRateMonitor.Core;
 using HeartRateMonitor.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -44,6 +45,7 @@ public sealed partial class SettingsPage : Page
     {
         var index = Array.IndexOf(Modes, BackdropService.Current);
         BackdropOptions.SelectedIndex = index >= 0 ? index : 0;
+        ObsModeSwitch.IsOn = AppConfig.OverlayObsCompatible;
         UpdateDetail(BackdropOptions.SelectedIndex);
     }
 
@@ -69,4 +71,8 @@ public sealed partial class SettingsPage : Page
     {
         DetailText.Text = index >= 0 && index < Details.Length ? Details[index] : string.Empty;
     }
-}
+
+    private void OnObsModeToggled(object sender, RoutedEventArgs e)
+    {
+        AppHost.Instance.SetOverlayObsCompatible(ObsModeSwitch.IsOn);
+    }}

@@ -12,6 +12,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <!--  页面标题  -->
@@ -60,6 +61,28 @@
                         IsClosable="True"
                         IsOpen="False"
                         Severity="Informational" />
+                </StackPanel>
+            </Border>
+
+            <!--  悬浮窗 OBS 兼容模式  -->
+            <Border
+                Grid.Row="2"
+                Padding="20"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Spacing="10">
+                    <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="悬浮窗 OBS 兼容" />
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="OBS 无法采集逐像素透明的分层窗口（BitBlt 黑屏、WGC 无画面）。开启后会在主屏右侧额外出现一个纯黑底的普通窗口，专供 OBS 采集（窗口标题为 HeartRateOverlay (OBS)，在 OBS 的窗口列表里选它）。透明悬浮窗保持不变、照常使用；给采集源加「色彩键」把黑底抠掉即可透明叠加。"
+                        TextWrapping="Wrap" />
+                    <ToggleSwitch
+                        x:Name="ObsModeSwitch"
+                        Header="启用 OBS 兼容模式"
+                        Toggled="OnObsModeToggled" />
                 </StackPanel>
             </Border>
         </Grid>

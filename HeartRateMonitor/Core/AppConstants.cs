@@ -6,7 +6,7 @@ namespace HeartRateMonitor.Core;
 public static class AppConstants
 {
     /// <summary>应用版本号。发布新版本时修改此处（同时修改 csproj 的 Version/FileVersion）。</summary>
-    public const string AppVersion = "26.11.13.1";
+    public const string AppVersion = "26.11.14.1";
 
     /// <summary>GitHub 仓库（owner/repo），用于自动更新检查。</summary>
     public const string GitHubRepo = "Laohehehe/HeartRateMonitor";

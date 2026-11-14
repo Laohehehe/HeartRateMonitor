@@ -10,9 +10,9 @@
     <ApplicationIcon>Assets\tray_icon.ico</ApplicationIcon>
 
     <!-- 版本号：按仓库既有规则使用发布日期 26.11.13 -->
-    <Version>26.11.13.1</Version>
-    <AssemblyVersion>26.11.13.1</AssemblyVersion>
-    <FileVersion>26.11.13.1</FileVersion>
+    <Version>26.11.14.1</Version>
+    <AssemblyVersion>26.11.14.1</AssemblyVersion>
+    <FileVersion>26.11.14.1</FileVersion>
     <Product>心率监测 HeartRate Monitor</Product>
     <Company>Laohehehe</Company>
     <Description>蓝牙心率数据实时显示与记录</Description>
